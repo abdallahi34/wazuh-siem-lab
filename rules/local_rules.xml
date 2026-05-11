@@ -1,0 +1,181 @@
+<!--
+  Custom Wazuh Detection Rules — wazuh-siem-lab
+  Author: Abdellahi Ahmed Zerough
+
+  Place at: /var/ossec/etc/rules/local_rules.xml on the Wazuh Manager
+  After editing: sudo /var/ossec/bin/wazuh-logtest  (verify)
+                 sudo systemctl restart wazuh-manager
+
+  IMPORTANT:
+  - Custom rule IDs must start at 100001 to avoid conflicts with built-in rules
+  - Never edit built-in rule files — they are overwritten on every Wazuh upgrade
+  - Always test rules with wazuh-logtest before applying to production
+-->
+
+<group name="local,custom,">
+
+  <!-- ================================================================
+       RULE 100001 — SSH Brute-Force (Enhanced)
+       MITRE: T1110.001 (Credential Access — Brute Force: Password Guessing)
+       
+       Built-in rule 5712 fires after 8 attempts in 2 min.
+       This custom rule fires earlier (5 attempts in 60s) with higher 
+       severity to reduce detection time — important in a live SOC context.
+       
+       Parent rule: 5760 (sshd: Failed password)
+       ================================================================ -->
+  <rule id="100001" level="10" frequency="5" timeframe="60">
+    <if_matched_sid>5760</if_matched_sid>
+    <same_source_ip/>
+    <description>SSH brute-force attempt: 5 failed logins from same IP in 60 seconds</description>
+    <mitre>
+      <id>T1110.001</id>
+    </mitre>
+    <group>authentication_failures,brute_force,pci_dss_11.4,gdpr_IV_35.7.d,</group>
+  </rule>
+
+  <!-- ================================================================
+       RULE 100002 — Unauthorized sudo Attempt (Privilege Escalation)
+       MITRE: T1548.003 (Privilege Escalation — Sudo and Sudo Caching)
+       
+       Fires immediately at level 12 (critical) — an unauthorized sudo 
+       attempt is almost never accidental. A regular user does not 
+       accidentally type sudo with a privileged command.
+       
+       Parent rule: 5405 (PAM: User not in sudoers)
+       ================================================================ -->
+  <rule id="100002" level="12">
+    <if_sid>5405</if_sid>
+    <match>NOT in sudoers</match>
+    <description>Privilege escalation attempt: user not in sudoers tried to run sudo</description>
+    <mitre>
+      <id>T1548.003</id>
+    </mitre>
+    <group>privilege_escalation,pci_dss_10.2.5,gdpr_IV_32.2,</group>
+  </rule>
+
+  <!-- ================================================================
+       RULE 100003 — Nmap / Port Scan Detected
+       MITRE: T1595 (Reconnaissance — Active Scanning)
+               T1046 (Discovery — Network Service Discovery)
+       
+       Detects common Nmap scan signatures in syslog.
+       ================================================================ -->
+  <rule id="100003" level="8">
+    <if_group>syslog</if_group>
+    <match>nmap|NMAP|port scan|probing|SYN scan</match>
+    <description>Port scan or network reconnaissance detected</description>
+    <mitre>
+      <id>T1595</id>
+      <id>T1046</id>
+    </mitre>
+    <group>recon,network_scan,</group>
+  </rule>
+
+  <!-- ================================================================
+       RULE 100004 — Critical File Modified (FIM — Enhanced)
+       MITRE: T1565.001 (Impact — Data Manipulation: Stored Data Manipulation)
+       
+       Built-in FIM rules (550, 553) fire on any monitored file change.
+       This custom rule specifically targets the most sensitive paths 
+       (/etc/passwd, /etc/shadow, /etc/sudoers) and fires at critical 
+       severity.
+       ================================================================ -->
+  <rule id="100004" level="10">
+    <if_group>syscheck</if_group>
+    <match>/etc/passwd|/etc/shadow|/etc/sudoers|/etc/ssh/sshd_config</match>
+    <description>Critical system file modified: possible credential or access control tampering</description>
+    <mitre>
+      <id>T1565.001</id>
+      <id>T1098</id>
+    </mitre>
+    <group>fim,critical_file,pci_dss_11.5,</group>
+  </rule>
+
+  <!-- ================================================================
+       RULE 100005 — New Local User Account Created
+       MITRE: T1136.001 (Persistence — Create Account: Local Account)
+       
+       Detects useradd/adduser commands in auth.log, indicating
+       potential persistence via new user creation.
+       ================================================================ -->
+  <rule id="100005" level="8">
+    <if_group>syslog,auth</if_group>
+    <match>new user:|useradd|adduser</match>
+    <description>New local user account created — verify if authorized</description>
+    <mitre>
+      <id>T1136.001</id>
+    </mitre>
+    <group>account_creation,persistence,pci_dss_10.2.5,</group>
+  </rule>
+
+  <!-- ================================================================
+       RULE 100006 — Suspicious Process: Netcat / Reverse Shell Indicators
+       MITRE: T1059 (Execution — Command and Scripting Interpreter)
+               T1071 (C2 — Application Layer Protocol)
+       
+       Fires at level 12 (critical) on process executions of tools 
+       commonly used to establish reverse shells or backdoors.
+       Detected via syslog process execution or rootcheck output.
+       ================================================================ -->
+  <rule id="100006" level="12">
+    <if_group>syslog,rootcheck</if_group>
+    <match>nc |netcat|ncat |/dev/tcp|bash -i|python -c.*socket|socat</match>
+    <description>Suspicious process execution — possible reverse shell attempt</description>
+    <mitre>
+      <id>T1059</id>
+      <id>T1071</id>
+    </mitre>
+    <group>reverse_shell,execution,high_priority,</group>
+  </rule>
+
+  <!-- ================================================================
+       RULE 100007 — Windows: Multiple Failed Logons (RDP Brute-Force)
+       MITRE: T1110.001 (Credential Access — Brute Force)
+       
+       Fires when Windows Event ID 4625 (failed logon) triggers 
+       5 times from the same source IP within 60 seconds.
+       Useful for detecting RDP brute-force attacks on the Windows agent.
+       ================================================================ -->
+  <rule id="100007" level="10" frequency="5" timeframe="60">
+    <if_matched_group>authentication_failed</if_matched_group>
+    <same_source_ip/>
+    <options>alert_by_email</options>
+    <description>Windows: multiple failed logons from same IP — possible RDP brute-force</description>
+    <mitre>
+      <id>T1110.001</id>
+    </mitre>
+    <group>authentication_failures,windows,brute_force,pci_dss_11.4,</group>
+  </rule>
+
+  <!-- ================================================================
+       RULE 100008 — Windows: New User Account Created (Event 4720)
+       MITRE: T1136.001 (Persistence — Create Account: Local Account)
+       ================================================================ -->
+  <rule id="100008" level="8">
+    <if_sid>18107</if_sid>
+    <description>Windows: new user account created (Event ID 4720)</description>
+    <mitre>
+      <id>T1136.001</id>
+    </mitre>
+    <group>account_creation,windows,persistence,</group>
+  </rule>
+
+  <!-- ================================================================
+       RULE 100009 — Windows Registry Run Key Modified (Persistence)
+       MITRE: T1547.001 (Persistence — Boot/Logon AutoStart: Registry Run Keys)
+       
+       FIM detects modification to HKLM\Software\Microsoft\Windows\
+       CurrentVersion\Run — a classic persistence mechanism.
+       ================================================================ -->
+  <rule id="100009" level="10">
+    <if_group>syscheck</if_group>
+    <match>CurrentVersion\\Run|CurrentVersion\\RunOnce</match>
+    <description>Windows registry Run key modified — possible malware persistence</description>
+    <mitre>
+      <id>T1547.001</id>
+    </mitre>
+    <group>fim,windows,persistence,registry,</group>
+  </rule>
+
+</group>
